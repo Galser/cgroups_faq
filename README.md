@@ -1,4 +1,4 @@
-Linux cgroups Memory Performance Analysis in cojunction with GoLang Garabage Collection events
+# Linux cgroups Memory Performance Analysis in cojunction with GoLang Garbage Collection events
 
 Overview
 
@@ -6,7 +6,7 @@ Memory performance often degrades significantly when a cgroup exceeds roughly **
 
 ---
 
-Technical Causes of Performance Degradation
+## Technical Causes of Performance Degradation
 
 1\. High-Water Mark Throttling
 
@@ -26,7 +26,7 @@ Technical Causes of Performance Degradation
 
 ---
 
-Prevention and Optimization Strategies
+## Prevention and Optimization Strategies
 
 1\. Tune Swap Settings
 
@@ -44,7 +44,7 @@ Prevention and Optimization Strategies
 * **Quantifiable Impact:** Look at the some and full metrics to see exactly what percentage of CPU time is wasted waiting for memory allocations or page resolves. You can view real-world troubleshooting workflows via the [Netdata Cgroups Memory Guide](https://www.netdata.cloud/academy/diagnosing-linux-cgroups/). \[[1](https://kubernetes.io/docs/reference/instrumentation/understand-psi-metrics/), [2](https://www.netdata.cloud/academy/diagnosing-linux-cgroups/)\]
 
 ---
-What Happens When Go GC Hits (The Breakdown)
+## What Happens When Go GC Hits (The Breakdown)
 
 1\. CPU Spikes due to "Mark Assists"
 
@@ -77,25 +77,25 @@ If your cgroup has a hard boundary (memory.max), hitting 85%+ means you are dang
 
 ---
 
-Timeline Scenario: The 85% Memory \+ Go GC Collision
+## Timeline Scenario: The >85% of Memory is used \+ Go GC Collision
 
 And now let’s think what is going to happen when those two events are combined. 
 
-Phase 1: The Resource Tug-of-War
+### Phase 1: The Resource Tug-of-War
 
 1. **App handles traffic spike and allocates memory:** The Go application experiences a brief spike in traffic or processes a large batch request, driving utilization upward.  
 2. **Detects cgroup threshold breach:** Total memory usage inside the cgroup climbs past **85%**, dangerously close to the memory.high throttling threshold or memory.max hard limit, which is explained in detail on the [Netdata Cgroups Memory Guide](https://www.netdata.cloud/academy/diagnosing-linux-cgroups/).  
 3. **Triggers GC and activates Mark Assists:** The Go runtime notices memory allocations hitting its internal target and fires up a background garbage collection cycle. Because memory is tight, Go's background threads cannot clean up fast enough, so the runtime hijacks active application goroutines to help scan memory for dead objects, as documented in the [Go Runtime Internals Guide](https://internals-for-interns.com/posts/go-garbage-collector/).  
 4. **Enforces Cgroup Throttling to slow down CPU:** Simultaneously, the Linux kernel notices the cgroup has breached its high-water mark. The kernel deliberately injects scheduling delays (throttling) into the container's CPU threads to slow down allocation speeds. Application throughput drops off a cliff.
 
-Phase 2: The Deceptive Cleanup
+### Phase 2: The Deceptive Cleanup
 
 5. **Issues madvise MADV\_FREE system call:** The Go GC finishes sweeping and marks thousands of memory blocks as free. It issues an madvise system call to notify Linux.  
 6. **Go considers the memory released:** The internal Go runtime registers this space as clean and available for re-allocation.  
 7. **Kernel retains pages in Resident Set Size:** Because MADV\_FREE is lazy, the Linux kernel keeps tracking those pages as part of the cgroup's active Resident Set Size (RSS) until the system experiences global pressure, a phenomenon tracked closely by engineers on the [University of Toronto Tech Blog](https://utcc.utoronto.ca/~cks/space/blog/linux/CgroupV2MemoryLimitsAndThrashing).  
 8. **Continues CPU throttling because RSS remains high:** The cgroup tracking metrics *still show memory utilization at 85%+*. The kernel continues to aggressively throttle the container's CPU.
 
-Phase 3: The Allocation Stall and Crash
+### Phase 3: The Allocation Stall and Crash
 
 9. **Requests new memory pages via mmap:** The application tries to handle the backlog of delayed requests. It requests fresh memory pages from the host OS.  
 10. **Bypasses background kswapd worker:** Because the cgroup still registers at 85%+, the kernel cannot wait for background asynchronous memory cleanup.  
@@ -105,9 +105,6 @@ Phase 3: The Allocation Stall and Crash
 14. **Invokes OOM Killer and sends SIGKILL:** The Linux kernel instantly invokes the **OOM Killer**, terminating the Go application process abruptly. To prevent this entire chain reaction, developers set soft constraints via the official [Go Garbage Collector Guide](https://go.dev/doc/gc-guide) to force collections earlier. \[[1](https://www.reddit.com/r/TopazLabs/comments/1e96tpw/errors_when_upscaling_video/)\]  
 
     ---
-
-    
-
 
 When a Go application operating at **85%+ cgroup memory capacity** triggers a **Garbage Collection (GC) cycle**, it creates a perfect storm. The Go runtime and the Linux kernel enter a "tug-of-war" over memory management resources.
 
